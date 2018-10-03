@@ -1352,8 +1352,24 @@ class RunManager(object):
             # Defer this until 50ms after the window has shown,
             # so that the GUI pops up faster in the meantime
             self.ui.firstPaint.connect(lambda: QtCore.QTimer.singleShot(50, load_the_config_file))
+            
+        # add a timer to check cycling status every X seconds
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.cycler)
+        # start timer with default time, set in main.ui to be 1s (1000ms)
+        self.cycle_time = int(self.ui.doubleSpinBox_cycle_time.value()*1000)
+        self.timer.start(self.cycle_time)
 
         self.ui.show()
+        
+    def cycler(self):
+        # every timeout check if engage should be sent and update timer timeout
+        if self.ui.checkBox_cycle.isChecked():
+            self.ui.pushButton_engage.click()            
+        
+        self.cycle_time = int(self.ui.doubleSpinBox_cycle_time.value()*1000)
+        if self.cycle_time != self.timer.interval():
+            self.timer.start(self.cycle_time)
 
     def setup_config(self):
         required_config_params = {"DEFAULT": ["experiment_name"],
