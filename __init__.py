@@ -16,6 +16,11 @@ from labscript_utils import PY2
 if PY2:
     str = unicode
 
+try:
+    from labscript_utils import check_version
+except ImportError:
+    raise ImportError('Require labscript_utils > 2.1.0')
+
 import itertools
 import os
 import sys
@@ -30,7 +35,9 @@ import labscript_utils.h5_lock
 import h5py
 import numpy as np
 
-import zprocess
+check_version('labscript_utils', '2.11.0', '3')
+from labscript_utils.ls_zprocess import ProcessTree, zmq_push_multipart
+process_tree = ProcessTree.instance()
 
 __version__ = '2.2.0'
 
@@ -46,13 +53,21 @@ def is_valid_python_identifier(name):
         import StringIO as io
     else:
         import io
+    # No whitespace allowed. Do this check here because an actual newline in the source
+    # is not easily distinguished from a NEWLINE token in the produced tokens, which is
+    # produced even when there is no newline character in the string. So since we ignore
+    # NEWLINE later, we must check for it now.
+    if name != "".join(name.split()):
+        return False
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(name).readline))
     except tokenize.TokenError:
         return False
-    if len(tokens) == 2:
-        (token_type, _, _, _, _), _ = tokens
-        return token_type == tokenize.NAME
+    token_types = [
+        t[0] for t in tokens if t[0] not in [tokenize.NEWLINE, tokenize.ENDMARKER]
+    ]
+    if len(token_types) == 1:
+        return token_types[0] == tokenize.NAME
     return False
 
 
@@ -512,6 +527,8 @@ def expand_globals(sequence_globals, evaled_globals, expansion_config = None, re
         for global_name in expansions:
             if expansions[global_name] == zip_key:
                 value = values[global_name]
+                if isinstance(value, Exception):
+                    continue
                 if not zip_key:
                     # Wrap up non-iterating globals (with zip_key = '') in a
                     # one-element list. When zipped and then outer product'ed,
@@ -531,6 +548,8 @@ def expand_globals(sequence_globals, evaled_globals, expansion_config = None, re
     for global_name in expansions:
         if expansions[global_name] == 'outer':
             value = values[global_name]
+            if isinstance(value, Exception):
+                continue
             axis = [value]
             axis = list(zip(*axis))
             dimensions['outer '+global_name] = len(axis)
@@ -681,13 +700,20 @@ def compile_labscript_with_globals_files(labscript_file, globals_files, output_p
 
 
 def compile_labscript_async(labscript_file, run_file, stream_port, done_callback):
-    """Compiles labscript_file with run_file. This function is designed
-    to be called in a thread.  The stdout and stderr from the compilation
-    will be shoveled into stream_port via zmq push as it spews forth, and
-    when compilation is complete, done_callback will be called with a
-    boolean argument indicating success."""
+    """Compiles labscript_file with run_file. This function is designed to be called in
+    a thread.  The stdout and stderr from the compilation will be shovelled into
+    stream_port via zmq push as it spews forth, and when compilation is complete,
+    done_callback will be called with a boolean argument indicating success. Note that
+    the zmq communication will be encrypted, or not, according to security settings in
+    labconfig. If you want to receive the data on a zmq socket, do so using a PULL
+    socket created from a labscript_utils.ls_zprocess.Context, or using a
+    labscript_utils.ls_zprocess.ZMQServer. These subclasses will also be configured
+    with the appropriate security settings and will be able to receive the messages.
+    """
     compiler_path = os.path.join(os.path.dirname(__file__), 'batch_compiler.py')
-    to_child, from_child, child = zprocess.subprocess_with_queues(compiler_path, stream_port)
+    to_child, from_child, child = process_tree.subprocess(
+        compiler_path, output_redirection_port=stream_port
+    )
     to_child.put(['compile', [labscript_file, run_file]])
     while True:
         signal, data = from_child.get()
@@ -702,14 +728,19 @@ def compile_labscript_async(labscript_file, run_file, stream_port, done_callback
 
 
 def compile_multishot_async(labscript_file, run_files, stream_port, done_callback):
-    """Compiles labscript_file with run_files. This function is designed
-    to be called in a thread.  The stdout and stderr from the compilation
-    will be shoveled into stream_port via zmq push as it spews forth,
-    and when each compilation is complete, done_callback will be called
-    with a boolean argument indicating success. Compilation will stop
-    after the first failure."""
+    """Compiles labscript_file with run_files. This function is designed to be called in
+    a thread.  The stdout and stderr from the compilation will be shovelled into
+    stream_port via zmq push as it spews forth, and when each compilation is complete,
+    done_callback will be called with a boolean argument indicating success. Compilation
+    will stop after the first failure.  If you want to receive the data on a zmq socket,
+    do so using a PULL socket created from a labscript_utils.ls_zprocess.Context, or
+    using a labscript_utils.ls_zprocess.ZMQServer. These subclasses will also be
+    configured with the appropriate security settings and will be able to receive the
+    messages."""
     compiler_path = os.path.join(os.path.dirname(__file__), 'batch_compiler.py')
-    to_child, from_child, child = zprocess.subprocess_with_queues(compiler_path, stream_port)
+    to_child, from_child, child = process_tree.subprocess(
+        compiler_path, output_redirection_port=stream_port
+    )
     try:
         for run_file in run_files:
             to_child.put(['compile', [labscript_file, run_file]])
@@ -723,7 +754,7 @@ def compile_multishot_async(labscript_file, run_files, stream_port, done_callbac
                 break
     except Exception:
         error = traceback.format_exc()
-        zprocess.zmq_push_multipart(stream_port, data=[b'stderr', error.encode('utf-8')])
+        zmq_push_multipart(stream_port, data=[b'stderr', error.encode('utf-8')])
         to_child.put(['quit', None])
         child.communicate()
         raise
@@ -732,12 +763,15 @@ def compile_multishot_async(labscript_file, run_files, stream_port, done_callbac
 
 
 def compile_labscript_with_globals_files_async(labscript_file, globals_files, output_path, stream_port, done_callback):
-    """Same as compile_labscript_with_globals_files, except it launches
-    a thread to do the work and does not return anything. Instead,
-    stderr and stdout will be put to stream_port via zmq push in
-    the multipart message format ['stdout','hello, world\n'] etc. When
-    compilation is finished, the function done_callback will be called
-    a boolean argument indicating success or failure."""
+    """Same as compile_labscript_with_globals_files, except it launches a thread to do
+    the work and does not return anything. Instead, stderr and stdout will be put to
+    stream_port via zmq push in the multipart message format ['stdout','hello, world\n']
+    etc. When compilation is finished, the function done_callback will be called a
+    boolean argument indicating success or failure.  If you want to receive the data on
+    a zmq socket, do so using a PULL socket created from a
+    labscript_utils.ls_zprocess.Context, or using a
+    labscript_utils.ls_zprocess.ZMQServer. These subclasses will also be configured with
+    the appropriate security settings and will be able to receive the messages."""
     try:
         make_run_file_from_globals_files(labscript_file, globals_files, output_path)
         thread = threading.Thread(
@@ -746,7 +780,7 @@ def compile_labscript_with_globals_files_async(labscript_file, globals_files, ou
         thread.start()
     except Exception:
         error = traceback.format_exc()
-        zprocess.zmq_push_multipart(stream_port, data=[b'stderr', error.encode('utf-8')])
+        zmq_push_multipart(stream_port, data=[b'stderr', error.encode('utf-8')])
         t = threading.Thread(target=done_callback, args=(False,))
         t.daemon = True
         t.start()
