@@ -463,6 +463,10 @@ class TreeView(QtWidgets.QTreeView):
 
 
 class AlternatingColorModel(QtGui.QStandardItemModel):
+    """Row height is now controlled here to allow for line wrapping of
+    the value field."""
+    EXTRA_ROW_HEIGHT = 7
+    GLOBALS_COL_VALUE = 2
 
     def __init__(self, treeview):
         QtGui.QStandardItemModel.__init__(self)
@@ -480,6 +484,9 @@ class AlternatingColorModel(QtGui.QStandardItemModel):
 
         # A cache, store brushes so we don't have to recalculate them. Is faster.
         self.alternate_brushes = {}
+        # need handle to treeview to get current column widths
+        self.treeview = treeview
+        self.fontmetrics = QtGui.QFontMetrics(self.treeview.font())
 
     def data(self, index, role):
         """When background color data is being requested, returns modified
@@ -504,6 +511,18 @@ class AlternatingColorModel(QtGui.QStandardItemModel):
                     alternate_brush = QtGui.QBrush(alternate_color)
                     self.alternate_brushes[normal_color.rgb()] = alternate_brush
                     return alternate_brush
+        
+        # change height of rows if value line can be wrapped
+        if role == QtCore.Qt.SizeHintRole and index.column() == self.GLOBALS_COL_VALUE:
+            val = QtGui.QStandardItemModel.data(self,index,QtCore.Qt.DisplayRole)
+            width = self.treeview.columnWidth(index.column())
+            # calculates height for value string, allowing for word wrapping
+            # this function does not know eliding, so if final line elides
+            # multiple rows it returns a number too high.
+            outRect = self.fontmetrics.boundingRect(0,0,width,10000,QtCore.Qt.TextWordWrap,val)
+            
+            return QtCore.QSize(width,outRect.height()+self.EXTRA_ROW_HEIGHT)
+            
         return QtGui.QStandardItemModel.data(self, index, role)
 
 
@@ -521,10 +540,6 @@ class ItemDelegate(QtWidgets.QStyledItemDelegate):
         fontmetrics = QtGui.QFontMetrics(treeview.font())
         text_height = fontmetrics.height()
         self.height = text_height + self.EXTRA_ROW_HEIGHT
-
-    def sizeHint(self, *args):
-        size = QtWidgets.QStyledItemDelegate.sizeHint(self, *args)
-        return QtCore.QSize(size.width(), self.height)
 
     def paint(self, painter, option, index):
         QtWidgets.QStyledItemDelegate.paint(self, painter, option, index)
@@ -610,6 +625,10 @@ class GroupTab(object):
         if self.ui.treeView_globals.columnWidth(self.GLOBALS_COL_EXPANSION) < 100:
             self.ui.treeView_globals.setColumnWidth(self.GLOBALS_COL_EXPANSION, 100)
         self.ui.treeView_globals.resizeColumnToContents(self.GLOBALS_COL_DELETE)
+        
+        # enable word wrap and connect resizing signal after initial sizing
+        self.ui.treeView_globals.setWordWrap(True)
+        self.ui.treeView_globals.header().sectionResized.connect(self.on_treeView_globals_resized)
 
     def connect_signals(self):
         self.ui.treeView_globals.leftClicked.connect(self.on_treeView_globals_leftClicked)
@@ -731,6 +750,14 @@ class GroupTab(object):
 
         row = [delete_item, name_item, value_item, units_item, expansion_item]
         return row
+        
+    def on_treeView_globals_resized(self, logicalIndex, oldSize, newSize):
+        '''If a globals value column resized, trigger row height re-eval'''
+        if logicalIndex == self.GLOBALS_COL_VALUE:
+            itemNum = self.globals_model.rowCount()
+            firstItemIndex = self.globals_model.item(0,logicalIndex).index()
+            lastItemIndex = self.globals_model.item(itemNum-1,logicalIndex).index()
+            self.ui.treeView_globals.dataChanged(firstItemIndex,lastItemIndex)                
 
     def on_treeView_globals_leftClicked(self, index):
         if qapplication.keyboardModifiers() != QtCore.Qt.NoModifier:
