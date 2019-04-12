@@ -1381,8 +1381,16 @@ class RunManager(object):
         
     def cycler(self):
         # every timeout check if engage should be sent and update timer timeout
-        if self.ui.checkBox_cycle.isChecked():
-            self.ui.pushButton_engage.click()            
+        # don't engage if more than 1 shot would be compiled
+        # get shot number from engage button text string
+        shot_text = self.ui.pushButton_engage.text()
+        # relies on all digits in string being one number
+        n_shots = int(''.join(filter(str.isdigit,shot_text)))
+        if self.ui.checkBox_cycle.isChecked() and n_shots == 1:
+            self.ui.pushButton_engage.click()
+        elif n_shots != 1:
+            # reset cycle checkbox if shots to compile > 1
+            self.ui.checkBox_cycle.setChecked(False)
         
         self.cycle_time = int(self.ui.doubleSpinBox_cycle_time.value()*1000)
         if self.cycle_time != self.timer.interval():
