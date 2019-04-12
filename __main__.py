@@ -513,6 +513,7 @@ class AlternatingColorModel(QtGui.QStandardItemModel):
                     return alternate_brush
         
         # change height of rows if value line can be wrapped
+        # do sizing here instead of delegate since delegate only called on init
         if role == QtCore.Qt.SizeHintRole and index.column() == self.GLOBALS_COL_VALUE:
             val = QtGui.QStandardItemModel.data(self,index,QtCore.Qt.DisplayRole)
             width = self.treeview.columnWidth(index.column())
@@ -531,6 +532,7 @@ class ItemDelegate(QtWidgets.QStyledItemDelegate):
     """An item delegate with a fixed height and faint grey vertical lines
     between columns"""
     EXTRA_ROW_HEIGHT = 7
+    GLOBALS_COL_VALUE = 2
 
     def __init__(self, treeview, *args, **kwargs):
         QtWidgets.QStyledItemDelegate.__init__(self, *args, **kwargs)
@@ -540,12 +542,32 @@ class ItemDelegate(QtWidgets.QStyledItemDelegate):
         fontmetrics = QtGui.QFontMetrics(treeview.font())
         text_height = fontmetrics.height()
         self.height = text_height + self.EXTRA_ROW_HEIGHT
+        self.treeview = treeview
 
     def paint(self, painter, option, index):
         QtWidgets.QStyledItemDelegate.paint(self, painter, option, index)
         if index.column() > 0:
             painter.setPen(self._pen)
             painter.drawLine(option.rect.topLeft(), option.rect.bottomLeft())
+            
+    def createEditor(self, parent, option, index):
+        if index.column() == self.GLOBALS_COL_VALUE:
+            # use the more general textEdit editor for the values column
+            editor = QtWidgets.QTextEdit(parent)
+            editor.setAcceptRichText(False)
+            editor.setWordWrapMode(QtGui.QTextOption.WordWrap)
+            return editor
+        else:
+            # keep standard editor for other columns
+            return QtWidgets.QStyledItemDelegate.createEditor(self,parent,option,index)
+    
+    def setModelData(self, editor, model, index):
+        if index.column() == self.GLOBALS_COL_VALUE:
+            # need to set data using plain text, not html
+            model.setData(index,editor.toPlainText(),QtCore.Qt.EditRole)
+        else:
+            # use default method
+            QtWidgets.QStyledItemDelegate.setModelData(self,editor,model,index)
 
 
 class GroupTab(object):
