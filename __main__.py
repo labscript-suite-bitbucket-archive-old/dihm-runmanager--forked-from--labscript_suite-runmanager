@@ -553,22 +553,12 @@ class ItemDelegate(QtWidgets.QStyledItemDelegate):
     def createEditor(self, parent, option, index):
         if index.column() == self.GLOBALS_COL_VALUE:
             # use the more general textEdit editor for the values column
-            editor = QtWidgets.QTextEdit(parent)
-            editor.setAcceptRichText(False)
+            editor = QtWidgets.QPlainTextEdit(parent)
             editor.setWordWrapMode(QtGui.QTextOption.WordWrap)
             return editor
         else:
             # keep standard editor for other columns
             return QtWidgets.QStyledItemDelegate.createEditor(self,parent,option,index)
-    
-    def setModelData(self, editor, model, index):
-        if index.column() == self.GLOBALS_COL_VALUE:
-            # need to set data using plain text, not html
-            model.setData(index,editor.toPlainText(),QtCore.Qt.EditRole)
-        else:
-            # use default method
-            QtWidgets.QStyledItemDelegate.setModelData(self,editor,model,index)
-
 
 class GroupTab(object):
     GLOBALS_COL_DELETE = 0
