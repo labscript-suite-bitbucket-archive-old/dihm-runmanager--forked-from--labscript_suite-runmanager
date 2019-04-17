@@ -463,8 +463,9 @@ class TreeView(QtWidgets.QTreeView):
 
 
 class AlternatingColorModel(QtGui.QStandardItemModel):
-    """Row height is now controlled here to allow for line wrapping of
-    the value field."""
+    """Modified Standard Item Model for the globals treeview that alternates
+    colors between rows and resizes row heights if globals value can be
+    word wrapped."""
     EXTRA_ROW_HEIGHT = 7
     GLOBALS_COL_VALUE = 2
 
@@ -494,7 +495,11 @@ class AlternatingColorModel(QtGui.QStandardItemModel):
        This has the effect of making the alternate colours visible even when
        custom colors have been set - the same shading will be applied to the
        custom colours. Only really looks sensible when the normal and
-       alternate colors are similar."""
+       alternate colors are similar.
+       
+       When cell size hint data is requested for the global values column,
+       returns a size with the same width and an expanded height to allow for
+       word wrapping of long global values."""
         if role == QtCore.Qt.BackgroundRole and index.row() % 2:
             normal_brush = QtGui.QStandardItemModel.data(self, index, QtCore.Qt.BackgroundRole)
             if normal_brush is not None:
@@ -512,14 +517,14 @@ class AlternatingColorModel(QtGui.QStandardItemModel):
                     self.alternate_brushes[normal_color.rgb()] = alternate_brush
                     return alternate_brush
         
-        # change height of rows if value line can be wrapped
+        # change height of rows if value line is to be wrapped
         # do sizing here instead of delegate since delegate only called on init
         if role == QtCore.Qt.SizeHintRole and index.column() == self.GLOBALS_COL_VALUE:
             val = QtGui.QStandardItemModel.data(self,index,QtCore.Qt.DisplayRole)
             width = self.treeview.columnWidth(index.column())
             # calculates height for value string, allowing for word wrapping
             # this function does not know eliding, so if final line elides
-            # multiple rows it returns a number too high.
+            # multiple rows it will return a number too high.
             outRect = self.fontmetrics.boundingRect(0,0,width,10000,QtCore.Qt.TextWordWrap,val)
             
             return QtCore.QSize(width,outRect.height()+self.EXTRA_ROW_HEIGHT)
@@ -530,8 +535,10 @@ class AlternatingColorModel(QtGui.QStandardItemModel):
 class ItemDelegate(QtWidgets.QStyledItemDelegate):
 
     """An item delegate with a fixed height and faint grey vertical lines
-    between columns"""
-    EXTRA_ROW_HEIGHT = 7
+    between columns.
+    
+    It also enforces a non-default QPlainTextEdit editor for the globals
+    value column with word wrapping enabled."""
     GLOBALS_COL_VALUE = 2
 
     def __init__(self, treeview, *args, **kwargs):
@@ -539,10 +546,6 @@ class ItemDelegate(QtWidgets.QStyledItemDelegate):
         self._pen = QtGui.QPen()
         self._pen.setWidth(1)
         self._pen.setColor(QtGui.QColor.fromRgb(128, 128, 128, 64))
-        fontmetrics = QtGui.QFontMetrics(treeview.font())
-        text_height = fontmetrics.height()
-        self.height = text_height + self.EXTRA_ROW_HEIGHT
-        self.treeview = treeview
 
     def paint(self, painter, option, index):
         QtWidgets.QStyledItemDelegate.paint(self, painter, option, index)
@@ -552,7 +555,7 @@ class ItemDelegate(QtWidgets.QStyledItemDelegate):
             
     def createEditor(self, parent, option, index):
         if index.column() == self.GLOBALS_COL_VALUE:
-            # use the more general textEdit editor for the values column
+            # use the more general QPlainTextEdit editor for the values column
             editor = QtWidgets.QPlainTextEdit(parent)
             editor.setWordWrapMode(QtGui.QTextOption.WordWrap)
             return editor
@@ -764,7 +767,8 @@ class GroupTab(object):
         return row
         
     def on_treeView_globals_resized(self, logicalIndex, oldSize, newSize):
-        '''If a globals value column resized, trigger row height re-eval'''
+        '''If a globals value column resized, send a dataChanged signal
+        in order to get row heights re-evaluated.'''
         if logicalIndex == self.GLOBALS_COL_VALUE:
             itemNum = self.globals_model.rowCount()
             firstItemIndex = self.globals_model.item(0,logicalIndex).index()
